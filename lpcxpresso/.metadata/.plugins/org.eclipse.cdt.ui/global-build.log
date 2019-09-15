@@ -1,0 +1,82 @@
+00:52:41 **** Incremental Build of configuration Debug for project lpc_board_nxp_lpcxpresso_1769 ****
+make -r all 
+make: Nothing to be done for `all'.
+00:52:42 **** Incremental Build of configuration Debug for project lpc_chip_175x_6x ****
+make -r all 
+make: Nothing to be done for `all'.
+00:52:43 **** Incremental Build of configuration Debug for project freertos_blinky ****
+make -r all 
+Building file: ../example/src/Perifericos/TIMER.c
+Invoking: MCU C Compiler
+arm-none-eabi-gcc -D__REDLIB__ -DDEBUG -D__CODE_RED -D__USE_LPCOPEN -DCORE_M3 -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc\usbd" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\FatFs" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Perifericos" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Fonts" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_board_nxp_lpcxpresso_1769\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\freertos\inc" -O0 -g -Wall -c -fmessage-length=0 -fno-builtin -ffunction-sections -fdata-sections -mcpu=cortex-m3 -mthumb -specs=redlib.specs -MMD -MP -MF"example/src/Perifericos/TIMER.d" -MT"example/src/Perifericos/TIMER.o" -MT"example/src/Perifericos/TIMER.d" -o "example/src/Perifericos/TIMER.o" "../example/src/Perifericos/TIMER.c"
+Finished building: ../example/src/Perifericos/TIMER.c
+ 
+Building file: ../example/src/FatFs/SD_AJS.c
+Invoking: MCU C Compiler
+arm-none-eabi-gcc -D__REDLIB__ -DDEBUG -D__CODE_RED -D__USE_LPCOPEN -DCORE_M3 -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc\usbd" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\FatFs" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Perifericos" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Fonts" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_board_nxp_lpcxpresso_1769\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\freertos\inc" -O0 -g -Wall -c -fmessage-length=0 -fno-builtin -ffunction-sections -fdata-sections -mcpu=cortex-m3 -mthumb -specs=redlib.specs -MMD -MP -MF"example/src/FatFs/SD_AJS.d" -MT"example/src/FatFs/SD_AJS.o" -MT"example/src/FatFs/SD_AJS.d" -o "example/src/FatFs/SD_AJS.o" "../example/src/FatFs/SD_AJS.c"
+Finished building: ../example/src/FatFs/SD_AJS.c
+ 
+Building file: ../example/src/FatFs/diskio.c
+Invoking: MCU C Compiler
+arm-none-eabi-gcc -D__REDLIB__ -DDEBUG -D__CODE_RED -D__USE_LPCOPEN -DCORE_M3 -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc\usbd" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\FatFs" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Perifericos" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Fonts" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_board_nxp_lpcxpresso_1769\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\freertos\inc" -O0 -g -Wall -c -fmessage-length=0 -fno-builtin -ffunction-sections -fdata-sections -mcpu=cortex-m3 -mthumb -specs=redlib.specs -MMD -MP -MF"example/src/FatFs/diskio.d" -MT"example/src/FatFs/diskio.o" -MT"example/src/FatFs/diskio.d" -o "example/src/FatFs/diskio.o" "../example/src/FatFs/diskio.c"
+Finished building: ../example/src/FatFs/diskio.c
+ 
+Building file: ../example/src/freertos_blinky.c
+Invoking: MCU C Compiler
+arm-none-eabi-gcc -D__REDLIB__ -DDEBUG -D__CODE_RED -D__USE_LPCOPEN -DCORE_M3 -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc\usbd" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\FatFs" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Perifericos" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\Fonts" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_board_nxp_lpcxpresso_1769\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\inc" -I"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\freertos\inc" -O0 -g -Wall -c -fmessage-length=0 -fno-builtin -ffunction-sections -fdata-sections -mcpu=cortex-m3 -mthumb -specs=redlib.specs -MMD -MP -MF"example/src/freertos_blinky.d" -MT"example/src/freertos_blinky.o" -MT"example/src/freertos_blinky.d" -o "example/src/freertos_blinky.o" "../example/src/freertos_blinky.c"
+../example/src/freertos_blinky.c: In function 'ADC_IRQHandler':
+../example/src/freertos_blinky.c:129:11: warning: variable 'canal' set but not used [-Wunused-but-set-variable]
+  uint16_t canal;
+           ^
+../example/src/freertos_blinky.c: In function 'SignalUpdateCH1':
+../example/src/freertos_blinky.c:372:21: warning: unused variable 'temp' [-Wunused-variable]
+     int16_t cuenta, temp;
+                     ^
+../example/src/freertos_blinky.c:370:16: warning: unused variable 'j' [-Wunused-variable]
+     uint8_t i, j;
+                ^
+../example/src/freertos_blinky.c: In function 'SignalUpdateCH2':
+../example/src/freertos_blinky.c:458:21: warning: unused variable 'temp' [-Wunused-variable]
+     int16_t cuenta, temp;
+                     ^
+../example/src/freertos_blinky.c:456:16: warning: unused variable 'j' [-Wunused-variable]
+     uint8_t i, j;
+                ^
+../example/src/freertos_blinky.c: In function 'SignalUpdateCH3':
+../example/src/freertos_blinky.c:543:21: warning: unused variable 'temp' [-Wunused-variable]
+     int16_t cuenta, temp;
+                     ^
+../example/src/freertos_blinky.c:541:16: warning: unused variable 'j' [-Wunused-variable]
+     uint8_t i, j;
+                ^
+../example/src/freertos_blinky.c: In function 'SDWrite':
+../example/src/freertos_blinky.c:665:48: warning: pointer targets in passing argument 3 of 'MostrarString' differ in signedness [-Wpointer-sign]
+  MostrarString(SAVE_TXT_X_POS, SAVE_TXT_Y_POS, pfaux, SAVING_COLOR, ROTACION90); //Ponemos en pantalla señal de Grabacion Disponible
+                                                ^
+In file included from C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT/TFT.h:12:0,
+                 from ../example/src/freertos_blinky.c:40:
+C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\freertos_blinky\example\src\TFT/Font.h:18:6: note: expected 'unsigned char *' but argument is of type 'char *'
+ void MostrarString(unsigned int x, unsigned int y, unsigned char * src, unsigned short color, unsigned char rotacion);
+      ^
+Finished building: ../example/src/freertos_blinky.c
+ 
+Building target: freertos_blinky.axf
+Invoking: MCU Linker
+arm-none-eabi-gcc -nostdlib -L"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\libs" -L"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_board_nxp_lpcxpresso_1769\Debug" -L"C:\Users\Matata\Dropbox\Tecnicas Digitales 2\Proyecto\Codigo\Micro\Proyecto\lpc_chip_175x_6x\Debug" -Xlinker -Map="freertos_blinky.map" -Xlinker --gc-sections -mcpu=cortex-m3 -mthumb -T "freertos_blinky_Debug.ld" -o "freertos_blinky.axf"  ./freertos/src/FreeRTOSCommonHooks.o ./freertos/src/heap_3.o ./freertos/src/list.o ./freertos/src/port.o ./freertos/src/queue.o ./freertos/src/tasks.o  ./example/src/Tasks/Tasks.o  ./example/src/TFT/Font.o ./example/src/TFT/Graphics.o ./example/src/TFT/TFT.o  ./example/src/Perifericos/SSP.o ./example/src/Perifericos/TIMER.o  ./example/src/Fonts/Calibri10.o  ./example/src/FatFs/option/syscall.o ./example/src/FatFs/option/unicode.o  ./example/src/FatFs/SD_AJS.o ./example/src/FatFs/diskio.o ./example/src/FatFs/ff.o  ./example/src/cr_startup_lpc175x_6x.o ./example/src/freertos_blinky.o ./example/src/hid_desc.o ./example/src/hid_generic.o ./example/src/sysinit.o   -lusbd_175x_6x_lib -llpc_board_nxp_lpcxpresso_1769 -llpc_chip_175x_6x
+Finished building target: freertos_blinky.axf
+ 
+make --no-print-directory post-build
+Performing post-build steps
+arm-none-eabi-size "freertos_blinky.axf"; # arm-none-eabi-objcopy -v -O binary "freertos_blinky.axf" "freertos_blinky.bin" ; # checksum -p LPC1769 -d "freertos_blinky.bin";
+   text	   data	    bss	    dec	    hex	filename
+  46660	     56	   3988	  50704	   c610	freertos_blinky.axf
+ 
+00:52:51 **** Incremental Build of configuration Debug for project lpc_board_nxp_lpcxpresso_1769 ****
+make -r all 
+make: Nothing to be done for `all'.
+00:52:52 **** Incremental Build of configuration Debug for project lpc_chip_175x_6x ****
+make -r all 
+make: Nothing to be done for `all'.
+00:52:53 **** Incremental Build of configuration Debug for project freertos_blinky ****
+make -r all 
+make: Nothing to be done for `all'.

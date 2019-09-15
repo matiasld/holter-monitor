@@ -1,0 +1,1238 @@
+/*
+ * @brief FreeRTOS Blinky example
+ *
+ * @note
+ * Copyright(C) NXP Semiconductors, 2014
+ * All rights reserved.
+ *
+ * @par
+ * Software that is described herein is for illustrative purposes only
+ * which provides customers with programming information regarding the
+ * LPC products.  This software is supplied "AS IS" without any warranties of
+ * any kind, and NXP Semiconductors and its licensor disclaim any and
+ * all warranties, express or implied, including all implied warranties of
+ * merchantability, fitness for a particular purpose and non-infringement of
+ * intellectual property rights.  NXP Semiconductors assumes no responsibility
+ * or liability for the use of the software, conveys no license or rights under any
+ * patent, copyright, mask work right, or any other intellectual property rights in
+ * or to any products. NXP Semiconductors reserves the right to make changes
+ * in the software without notification. NXP Semiconductors also makes no
+ * representation or warranty that such application will be suitable for the
+ * specified use without further testing or modification.
+ *
+ * @par
+ * Permission to use, copy, modify, and distribute this software and its
+ * documentation is hereby granted, under NXP Semiconductors' and its
+ * licensor's relevant copyrights in the software, without fee, provided that it
+ * is used in conjunction with NXP Semiconductors microcontrollers.  This
+ * copyright, permission, and disclaimer notice must appear in all copies of
+ * this code.
+ */
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdlib.h>
+#include "board.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
+#include "queue.h"
+#include "TFT.h"
+#include "TIMER.h"
+#include "SSP.h"
+#include "ff.h"
+#include "integer.h"
+#include "diskio.h"
+#include "app_usbd_cfg.h"
+#include "hid_generic.h"
+#include "varios.h"
+
+/*****************************************************************************
+ * Private types/enumerations/variables
+ ****************************************************************************/
+
+/*****************************************************************************
+ * Public types/enumerations/variables
+ ****************************************************************************/
+xQueueHandle cola_SD;
+xQueueHandle colaADC0, colaADC1, colaADC2;
+xQueueHandle cola_base_tiempo;
+xQueueHandle cola_SSP_TX;
+xQueueHandle cola_SSP_RX;
+xQueueHandle cola_buffer;
+xQueueHandle cola_config;
+
+xSemaphoreHandle sem_SD, sem_SD_init, sem_SD_Deinit;
+xSemaphoreHandle sem_USB, sem_USB_init;
+xSemaphoreHandle sem_TFT; // <! Semaforo mutex para terminar de escribir la TFT
+xSemaphoreHandle sem_disp, sem_dimm, sem_modo;
+
+xTaskHandle SDWriteTask = NULL;
+xTaskHandle ModeTask = NULL;
+xTaskHandle DisparoTaskHandle = NULL;
+
+FATFS fs;
+
+static USBD_HANDLE_T g_hUsb;
+
+extern const  USBD_HW_API_T hw_api;
+extern const  USBD_CORE_API_T core_api;
+extern const  USBD_HID_API_T hid_api;
+/* Since this example only uses HID class link functions for that class only */
+static const  USBD_API_T g_usbApi = {
+	&hw_api,
+	&core_api,
+	0,
+	0,
+	&hid_api,
+	0,
+	0,
+	0x02221101,
+};
+
+const USBD_API_T *g_pUsbApi = &g_usbApi;
+
+/*****************************************************************************
+ * Private functions
+ ****************************************************************************/
+void EINT3_IRQHandler(void){
+	portBASE_TYPE cambio = pdFALSE;
+	uint32_t state0 = Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT, 0);	//Revisa el puerto 0 y devuelve que pin lo activó
+	uint32_t state2 = Chip_GPIOINT_GetStatusFalling(LPC_GPIOINT, 2);	//Revisa el puerto 2 y devuelve que pin lo activó
+
+	// Deshabiltamos las interrupciones hasta que las habiliten en otro lado
+	Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 0, 0);
+	Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 2, 0);
+
+	// Nos fijamos que pulsador fue el que causo la interrupcion y liberamos el semaforo correspondiente
+	if(state0 & (1 << 11)){
+		xSemaphoreGiveFromISR(sem_dimm, &cambio);
+		Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 0, 1 << 11);
+	}
+
+	if(state2 & (1 << 10)){
+		xSemaphoreGiveFromISR(sem_disp, &cambio);
+		Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 2, 1 << 10);
+	}
+
+	if(state0 & (1 << 18)){
+		xSemaphoreGiveFromISR(sem_modo, &cambio);
+		Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 0, 1 << 18);
+	}
+
+	portEND_SWITCHING_ISR(cambio);
+}
+
+void ADC_IRQHandler(void)
+{
+	uint16_t dato;
+	uint16_t canal;
+	config_t configActual;
+	portBASE_TYPE cambio = pdFALSE, cambio_g = pdFALSE;
+
+	// Esto deberia devolver siempre pdTRUE
+	xQueuePeekFromISR(cola_config, &configActual);
+
+	// Solo deberia entrar a uno de los if en cada interrupcion
+	if(Chip_ADC_ReadValue(LPC_ADC, ADC_CH5, &dato) == SUCCESS){
+		// Si no estaba habilitado el canal, no mando el dato a la cola
+		if(configActual.canales_activos & CH1_MASK){
+			xQueueSendToBackFromISR(colaADC0, &dato, &cambio);
+			canal = 5000;
+		}
+
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH2, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH5, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH1, ENABLE);
+		Chip_ADC_SetStartMode(LPC_ADC, ADC_START_NOW, ADC_TRIGGERMODE_RISING);
+	}
+
+	if(Chip_ADC_ReadValue(LPC_ADC, ADC_CH1, &dato) == SUCCESS){
+		// Si no estaba habilitado el canal, no mando el dato a la cola
+		if(configActual.canales_activos & CH2_MASK){
+			xQueueSendToBackFromISR(colaADC1, &dato, &cambio);
+			canal = 5001;
+		}
+
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH1, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH5, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH2, ENABLE);
+		Chip_ADC_SetStartMode(LPC_ADC, ADC_START_NOW, ADC_TRIGGERMODE_RISING);
+	}
+
+	if(Chip_ADC_ReadValue(LPC_ADC, ADC_CH2, &dato) == SUCCESS){
+		// Si no estaba habilitado el canal, no mando el dato a la cola
+		if(configActual.canales_activos & CH3_MASK){
+			xQueueSendToBackFromISR(colaADC2, &dato, &cambio);
+			canal = 5002;
+		}
+
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH2, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH5, DISABLE);
+		Chip_ADC_EnableChannel(LPC_ADC, ADC_CH1, DISABLE);
+	}
+
+//	// Si esta habilitada la grabacion en la SD, enviamos el dato a la cola correspondiente
+//	if(configActual.flag_sd){
+//		xQueueSendToBackFromISR(cola_SD, &canal, &cambio_g);
+//		xQueueSendToBackFromISR(cola_SD, &dato, &cambio_g);
+//	}
+
+	if(cambio == pdTRUE || cambio_g == pdTRUE){
+		portEND_SWITCHING_ISR(pdTRUE);
+	} else{
+		portEND_SWITCHING_ISR(pdFALSE);
+	}
+}
+
+/**
+ * @brief	Handle interrupt from USB
+ * @return	Nothing
+ */
+void USB_IRQHandler(void)
+{
+	USBD_API->hw->ISR(g_hUsb);
+}
+
+/* Find the address of interface descriptor for given class type. */
+USB_INTERFACE_DESCRIPTOR *find_IntfDesc(const uint8_t *pDesc, uint32_t intfClass)
+{
+	USB_COMMON_DESCRIPTOR *pD;
+	USB_INTERFACE_DESCRIPTOR *pIntfDesc = 0;
+	uint32_t next_desc_adr;
+
+	pD = (USB_COMMON_DESCRIPTOR *) pDesc;
+	next_desc_adr = (uint32_t) pDesc;
+
+	while (pD->bLength) {
+		/* is it interface descriptor */
+		if (pD->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE) {
+
+			pIntfDesc = (USB_INTERFACE_DESCRIPTOR *) pD;
+			/* did we find the right interface descriptor */
+			if (pIntfDesc->bInterfaceClass == intfClass) {
+				break;
+			}
+		}
+		pIntfDesc = 0;
+		next_desc_adr = (uint32_t) pD + pD->bLength;
+		pD = (USB_COMMON_DESCRIPTOR *) next_desc_adr;
+	}
+
+	return pIntfDesc;
+}
+
+/* Initialize pin and clocks for USB port */
+static void usb_pin_clk_init(void)
+{
+	/* enable USB PLL and clocks */
+	Chip_USB_Init();
+	/* VBUS is not connected on the NXP LPCXpresso LPC1769, so leave the pin at default setting. */
+	/*Chip_IOCON_PinMux(LPC_IOCON, 1, 30, IOCON_MODE_INACT, IOCON_FUNC2);*/ /* USB VBUS */
+
+	Chip_IOCON_PinMux(LPC_IOCON, 0, 29, IOCON_MODE_INACT, IOCON_FUNC1);	/* P0.29 D1+, P0.30 D1- */
+	Chip_IOCON_PinMux(LPC_IOCON, 0, 30, IOCON_MODE_INACT, IOCON_FUNC1);
+
+	LPC_USB->USBClkCtrl = 0x12;                /* Dev, AHB clock enable */
+	while ((LPC_USB->USBClkSt & 0x12) != 0x12);
+}
+
+/* Tarea encargada de la inicializacion del PLL, TIMERS y ADC*/
+static void prvSetupHardware(void)
+{
+	ADC_CLOCK_SETUP_T adc;
+
+	Chip_GPIO_Init(LPC_GPIO);
+	Chip_IOCON_Init(LPC_IOCON);
+
+	// Configuracion de pulsadores:
+	Chip_IOCON_PinMux(LPC_IOCON, KEY_DIMMER, MD_PUP, IOCON_FUNC0);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, KEY_DIMMER);
+	Chip_IOCON_PinMux(LPC_IOCON, KEY_DISPARO, MD_PUP, IOCON_FUNC0);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, KEY_DISPARO);
+	Chip_IOCON_PinMux(LPC_IOCON, KEY_MODO, MD_PUP, IOCON_FUNC0);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, KEY_MODO);
+
+	// Interrupciones por flanco descendente
+	Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 0, (1 << 11) | (1 << 18));
+	Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 2, 1 << 10);
+
+	// Las interrupciones de GPIO comparten en el NVIC el lugar con la EINT3
+	NVIC_ClearPendingIRQ(EINT3_IRQn);
+	NVIC_EnableIRQ(EINT3_IRQn);
+
+
+	//CONFIGURACION PIN ADC0
+	Chip_IOCON_PinMux(LPC_IOCON, ADC0, MD_PLN, IOCON_FUNC3);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, ADC0);
+	//CONFIGURACION PIN ADC1
+	Chip_IOCON_PinMux(LPC_IOCON, ADC1, MD_PLN, IOCON_FUNC1);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, ADC1);
+	//CONFIGURACION PIN ADC2
+	Chip_IOCON_PinMux(LPC_IOCON, ADC2, MD_PLN, IOCON_FUNC1);
+	Chip_GPIO_SetPinDIRInput(LPC_GPIO, ADC2);
+
+	Chip_ADC_Init(LPC_ADC, &adc);
+	Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_ADC);
+	Chip_Clock_SetPCLKDiv(SYSCTL_PCLK_ADC, SYSCTL_CLKDIV_1);
+	Chip_ADC_EnableChannel(LPC_ADC, ADC_CH5, ENABLE);
+	Chip_ADC_SetSampleRate(LPC_ADC, &adc, FS);
+	Chip_ADC_SetBurstCmd(LPC_ADC, DISABLE);
+
+	NVIC_ClearPendingIRQ(ADC_IRQn);
+	NVIC_EnableIRQ(ADC_IRQn);
+	Chip_ADC_Int_SetChannelCmd(LPC_ADC, ADC_CH1, ENABLE);
+	Chip_ADC_Int_SetChannelCmd(LPC_ADC, ADC_CH2, ENABLE);
+	Chip_ADC_Int_SetChannelCmd(LPC_ADC, ADC_CH5, ENABLE);
+
+	Chip_GPIO_SetPinDIROutput(LPC_GPIO, LED_DEBUG);
+
+
+	// Inicializacion USB
+	USBD_API_INIT_PARAM_T usb_param;
+	USB_CORE_DESCS_T desc;
+	ErrorCode_t ret = LPC_OK;
+
+	/* enable clocks and pinmux */
+	usb_pin_clk_init();
+
+	/* initialize call back structures */
+	memset((void *) &usb_param, 0, sizeof(USBD_API_INIT_PARAM_T));
+	usb_param.usb_reg_base = LPC_USB_BASE + 0x200;
+	usb_param.max_num_ep = 2;
+	usb_param.mem_base = USB_STACK_MEM_BASE;
+	usb_param.mem_size = USB_STACK_MEM_SIZE;
+
+	/* Set the USB descriptors */
+	desc.device_desc = (uint8_t *) USB_DeviceDescriptor;
+	desc.string_desc = (uint8_t *) USB_StringDescriptor;
+
+	/* Note, to pass USBCV test full-speed only devices should have both
+	 * descriptor arrays point to same location and device_qualifier set
+	 * to 0.
+	 */
+	desc.high_speed_desc = USB_FsConfigDescriptor;
+	desc.full_speed_desc = USB_FsConfigDescriptor;
+	desc.device_qualifier = 0;
+
+	/* USB Initialization */
+	ret = USBD_API->hw->Init(&g_hUsb, &desc, &usb_param);
+	if (ret == LPC_OK) {
+
+		ret = usb_hid_init(g_hUsb,
+			(USB_INTERFACE_DESCRIPTOR *) &USB_FsConfigDescriptor[sizeof(USB_CONFIGURATION_DESCRIPTOR)],
+			&usb_param.mem_base, &usb_param.mem_size);
+		if (ret == LPC_OK) {
+			/*  enable USB interrupts */
+			NVIC_EnableIRQ(USB_IRQn);
+			/* now connect */
+			USBD_API->hw->Connect(g_hUsb, 1);
+		}
+	}
+}
+
+// Tarea encargada de la inicializacion de la TFT y TIMERS
+// Una vez realizada se eliminara a si misma
+static void TFTInitAndSetup(void *pvParameters){
+	while (1) {
+		tftSetup(); // Inicializo pines y la TFT
+
+		SetupBackground(); // Seteo el fondo que vamos a re-utilizar
+
+		InitTIMER0();
+		InitTIMER1();
+		InitSSP1();
+
+		/* Eliminamos la tarea, se supone que nadie deberia crearla de nuevo, por
+		ser de inicializacion */
+		vTaskDelete(NULL);
+	}
+}
+
+// Tarea encargada de actuailzar la señal que dibujamos (CANAL 1)
+static void SignalUpdateCH1(void *pvParameters){
+//	static int16_t buffer[UPDATE_LENGHT];
+	static uint32_t counter = 0;
+	static int16_t buff_datos[LARGO_PROMEDIO];
+	static int16_t buffer1[UPDATE_LENGHT];
+	static uint16_t prom_count = 0;
+	config_t configActual;
+	int16_t canal = 5000;
+
+	while(1){
+		// Si hay un dato nuevo en la cola
+		if(xQueueReceive(colaADC0, buff_datos+prom_count, portMAX_DELAY) == pdTRUE){
+			prom_count++;
+
+			// Cuando tomamos LARGO_PROMEDIO muestras realizamos el promedio y ponemos el pixel correspondiente
+			if(prom_count == LARGO_PROMEDIO){
+				uint8_t i, j;
+				int32_t promedio = 0;
+				int16_t cuenta, temp;
+
+				prom_count = 0;
+
+#ifdef PROM_ON
+				// Promedio los LARGO_PROMEDIO datos
+				for(i = 0; i < LARGO_PROMEDIO; i++){
+					promedio = promedio + buff_datos[i];
+				}
+				promedio /= LARGO_PROMEDIO;
+
+				// Resto offset
+				promedio -= 4096/2;
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#else
+				// Ordeno de menor a mayor, metodo de burbujeo
+			    for (i = 1; i < LARGO_PROMEDIO; i++){
+			    	for (j = 0 ; j < LARGO_PROMEDIO - 1; j++){
+					   if (buff_datos[j] > buff_datos[j+1])
+							temp = buff_datos[j];
+							buff_datos[j] = buff_datos[j+1];
+							buff_datos[j+1] = temp;
+			    	}
+			    }
+				// Tomamos el promedio de las 3 muestras del medio
+				promedio = buff_datos[LARGO_PROMEDIO/2]+buff_datos[LARGO_PROMEDIO/2-1]+buff_datos[LARGO_PROMEDIO/2+1] ;
+				promedio /= CANT_PROM;
+				// Restamos offset
+				promedio -= 4096/2;
+				// Regla de 3:
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#endif
+
+				// No deberia esperar nunca
+				xQueuePeek(cola_config, &configActual, portMAX_DELAY);
+
+				if(configActual.flag_usb)
+					ADC_SetEP(1, &cuenta);
+
+				if(configActual.flag_sd){
+					canal = 5000;
+					xQueueSendToBack(cola_SD, &canal, portMAX_DELAY);
+					xQueueSendToBack(cola_SD, &cuenta, portMAX_DELAY);
+				}
+
+				// Me fijo por donde esta la base de tiempos
+				xQueuePeek(cola_base_tiempo, &counter, portMAX_DELAY); // Se supone que siempre tiene que tener un valor
+				buffer1[counter] = cuenta;
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				//Pongo el pixel actual
+				LCD_PutPixel(X_AXIS_BEGIN_X+cuenta, Y_AXIS_BEGIN_Y+counter, SIGNAL_COLOR_CH1);
+
+				//Limpio el/los pixel/es siguientes
+				if(counter == UPDATE_LENGHT-1){
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer1[0], Y_AXIS_BEGIN_Y, AXIS_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y, AXIS_COLOR);
+				} else{
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer1[counter+1], Y_AXIS_BEGIN_Y+counter+1, BCKGD_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y+counter+1, AXIS_COLOR);
+				}
+				xSemaphoreGive(sem_TFT);
+			}
+		}
+	}
+}
+
+// Tarea encargada de actuailzar la señal que dibujamos (CANAL 2)
+static void SignalUpdateCH2(void *pvParameters){
+	static int16_t buffer[UPDATE_LENGHT];
+	static uint32_t counter = 0;
+	static int16_t buff_datos[LARGO_PROMEDIO];
+	static uint16_t prom_count = 0;
+	config_t configActual;
+	int16_t canal = 5001;
+
+	while(1){
+		// Si hay un dato nuevo en la cola
+		if(xQueueReceive(colaADC1, buff_datos+prom_count, portMAX_DELAY) == pdTRUE){
+			prom_count++;
+
+			// Cuando tomamos LARGO_PROMEDIO muestras realizamos el promedio y ponemos el pixel correspondiente
+			if(prom_count == LARGO_PROMEDIO){
+				uint8_t i, j;
+				int32_t promedio = 0;
+				int16_t cuenta, temp;
+
+				prom_count = 0;
+
+#ifdef PROM_ON
+				// Promedio los LARGO_PROMEDIO datos
+				for(i = 0; i < LARGO_PROMEDIO; i++){
+					promedio = promedio + buff_datos[i];
+				}
+				promedio /= LARGO_PROMEDIO;
+
+				// Resto offset
+				promedio -= 4096/2;
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#else
+				// Ordeno de menor a mayor, metodo de burbujeo
+			    for (i = 1; i < LARGO_PROMEDIO; i++){
+			    	for (j = 0 ; j < LARGO_PROMEDIO - 1; j++){
+					   if (buff_datos[j] > buff_datos[j+1])
+							temp = buff_datos[j];
+							buff_datos[j] = buff_datos[j+1];
+							buff_datos[j+1] = temp;
+			    	}
+			    }
+				// Tomamos el promedio de las 3 muestras del medio
+				promedio = buff_datos[LARGO_PROMEDIO/2]+buff_datos[LARGO_PROMEDIO/2-1]+buff_datos[LARGO_PROMEDIO/2+1] ;
+				promedio /= CANT_PROM;
+				// Restamos offset
+				promedio -= 4096/2;
+				// Regla de 3:
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#endif
+
+				// No deberia esperar nunca
+				xQueuePeek(cola_config, &configActual, portMAX_DELAY);
+
+				if(configActual.flag_usb)
+					ADC_SetEP(2, &cuenta);
+
+				if(configActual.flag_sd){
+					canal = 5001;
+					xQueueSendToBack(cola_SD, &canal, portMAX_DELAY);
+					xQueueSendToBack(cola_SD, &cuenta, portMAX_DELAY);
+				}
+
+				// Me fijo por donde esta la base de tiempos
+				xQueuePeek(cola_base_tiempo, &counter, portMAX_DELAY); // Se supone que siempre tiene que tener un valor
+				buffer[counter] = cuenta;
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				//Pongo el pixel actual
+				LCD_PutPixel(X_AXIS_BEGIN_X+cuenta, Y_AXIS_BEGIN_Y+counter, SIGNAL_COLOR_CH2);
+
+				//Limpio el/los pixel/es siguientes
+				if(counter == UPDATE_LENGHT-1){
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer[0], Y_AXIS_BEGIN_Y, AXIS_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y, AXIS_COLOR);
+				} else{
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer[counter+1], Y_AXIS_BEGIN_Y+counter+1, BCKGD_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y+counter+1, AXIS_COLOR);
+				}
+				xSemaphoreGive(sem_TFT);
+			}
+		}
+	}
+}
+
+// Tarea encargada de actuailzar la señal que dibujamos (CANAL 3)
+static void SignalUpdateCH3(void *pvParameters){
+	static int16_t buffer[UPDATE_LENGHT];
+	static uint32_t counter = 0;
+	static int16_t buff_datos[LARGO_PROMEDIO];
+	static uint16_t prom_count = 0;
+	config_t configActual;
+	int16_t canal = 5002;
+
+	while(1){
+		// Si hay un dato nuevo en la cola
+		if(xQueueReceive(colaADC2, buff_datos+prom_count, portMAX_DELAY) == pdTRUE){
+			prom_count++;
+
+			// Cuando tomamos LARGO_PROMEDIO muestras realizamos el promedio y ponemos el pixel correspondiente
+			if(prom_count == LARGO_PROMEDIO){
+				uint8_t i, j;
+				int32_t promedio = 0;
+				int16_t cuenta, temp;
+
+				prom_count = 0;
+
+#ifdef PROM_ON
+				// Promedio los LARGO_PROMEDIO datos
+				for(i = 0; i < LARGO_PROMEDIO; i++){
+					promedio = promedio + buff_datos[i];
+				}
+				promedio /= LARGO_PROMEDIO;
+
+				// Resto offset
+				promedio -= 4096/2;
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#else
+				// Ordeno de menor a mayor, metodo de burbujeo
+			    for (i = 1; i < LARGO_PROMEDIO; i++){
+			    	for (j = 0 ; j < LARGO_PROMEDIO - 1; j++){
+					   if (buff_datos[j] > buff_datos[j+1])
+							temp = buff_datos[j];
+							buff_datos[j] = buff_datos[j+1];
+							buff_datos[j+1] = temp;
+			    	}
+			    }
+				// Tomamos el promedio de las 3 muestras del medio
+			    promedio = buff_datos[LARGO_PROMEDIO/2]+buff_datos[LARGO_PROMEDIO/2-1]+buff_datos[LARGO_PROMEDIO/2+1] ;
+			    promedio /= CANT_PROM;
+				// Restamos offset
+				promedio -= 4096/2;
+				// Regla de 3:
+				cuenta = (promedio * SIGNAL_MAX) / 2048;
+#endif
+
+				// No deberia esperar nunca
+				xQueuePeek(cola_config, &configActual, portMAX_DELAY);
+
+				if(configActual.flag_usb)
+					ADC_SetEP(3, &cuenta);
+
+				if(configActual.flag_sd){
+					canal = 5002;
+					xQueueSendToBack(cola_SD, &canal, portMAX_DELAY);
+					xQueueSendToBack(cola_SD, &cuenta, portMAX_DELAY);
+				}
+
+				// Me fijo por donde esta la base de tiempos
+				xQueuePeek(cola_base_tiempo, &counter, portMAX_DELAY); // Se supone que siempre tiene que tener un valor
+				buffer[counter] = cuenta;
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				//Pongo el pixel actual
+				LCD_PutPixel(X_AXIS_BEGIN_X+cuenta, Y_AXIS_BEGIN_Y+counter, SIGNAL_COLOR_CH3);
+
+				//Limpio el/los pixel/es siguientes
+				if(counter == UPDATE_LENGHT-1){
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer[0], Y_AXIS_BEGIN_Y, AXIS_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y, AXIS_COLOR);
+				} else{
+					LCD_PutPixel(X_AXIS_BEGIN_X+buffer[counter+1], Y_AXIS_BEGIN_Y+counter+1, BCKGD_COLOR);
+					LCD_PutPixel(X_AXIS_BEGIN_X, Y_AXIS_BEGIN_Y+counter+1, AXIS_COLOR);
+				}
+				xSemaphoreGive(sem_TFT);
+			}
+		}
+	}
+}
+
+// Tarea encargada de ir escribiendo la SD mientras se graba
+static void SDWrite(void *pvParameters){
+	static uint8_t canales_r = 0; // Variable para ver que canales fueron recibidos
+	static uint8_t canales = 0;
+	static int16_t dato_ch[3];
+	static FIL *archivo;
+	static FRESULT fr;
+	static char *buff;
+	static uint8_t fil_aux = 0;
+	char nombre_archivo[16] = "0:SGNL";
+	msg_disparo_t *mensaje_rx = (msg_disparo_t *) pvParameters;
+	uint8_t *pcanales;
+	char *pfaux;
+
+	buff = (char *) malloc(SIZE_WRITE_SAVE);
+	buff[0] = '\0';
+
+	// De esta forma estamos tocando las variables pasadas por la tarea encargada del disparo
+	pcanales = mensaje_rx->canales;
+	archivo = mensaje_rx->archivo;
+
+	canales = *pcanales;
+
+	xQueueSendToBack(cola_buffer, &buff, portMAX_DELAY);
+
+	// Rutina para encontrar el nombre correcto a guardar
+	do{
+		char arch_aux[3];
+
+		pfaux = strrchr(nombre_archivo, 'L'); // Buscamos la L en "0:SGNL"
+		*(pfaux+1) = '\0'; // "Borramos" el numero y la extension
+		itoa(fil_aux, arch_aux, 10);
+		strcat(nombre_archivo, arch_aux); // Quedando "0:SGNLXX"
+		strcat(nombre_archivo, ".txt"); // Agregamos la extension
+
+		fr = f_stat(nombre_archivo, NULL);
+
+		fil_aux++;
+	}while(fr == FR_OK);
+
+	fr = f_open(archivo, nombre_archivo, FA_WRITE | FA_CREATE_ALWAYS);
+
+	// No deberia entrar aca...
+	if(fr != FR_OK){
+		//TODO: Si llega a entrar, nos ocupamos de avisar mediante un flag de error
+
+	}
+
+	// En esta instancia ya creamos el archivo a escribir, avisamos en pantalla
+	pfaux = strchr(nombre_archivo, '.');
+	*pfaux = '\0'; // Borramos el ".txt"
+	pfaux = strchr(nombre_archivo, ':');
+	pfaux++; // Borramos el "0:"
+	xSemaphoreTake(sem_TFT, portMAX_DELAY);
+	MostrarString(SAVE_TXT_X_POS, SAVE_TXT_Y_POS, pfaux, SAVING_COLOR, ROTACION90);
+	xSemaphoreGive(sem_TFT);
+
+	while(1){
+		int16_t dato;
+
+		// Si puedo recibir un dato
+		if(xQueueReceive(cola_SD, &dato, portMAX_DELAY) == pdTRUE){
+			// Pregunto por valores fuera del rango del ADC, usados para saber de que canal vino el dato
+			switch(dato){
+			case 5000:{
+				// Recibo dato del CH1
+				xQueueReceive(cola_SD, &dato_ch[0], 0); // Deberia recibir un dato siempre
+				canales_r |= 0x01;
+
+				break;
+			}
+			case 5001:{
+				// Recibo dato del CH2
+				xQueueReceive(cola_SD, &(dato_ch[1]), 0); // Deberia recibir un dato siempre
+				canales_r |= 0x02;
+
+				break;
+			}
+			case 5002:{
+				// Recibo dato del CH3
+				xQueueReceive(cola_SD, &(dato_ch[2]), 0); // Deberia recibir un dato siempre
+				canales_r |= 0x04;
+
+				break;
+			}
+			default:break; // No deberia entrar nunca aca
+			}
+
+			if(canales_r == canales){
+				// Nos llego una muestra de cada canal activo
+				char buff_aux[6];
+				char *paux;
+				static uint32_t i, quantity;
+
+				canales_r = 0;
+
+				// Pasamos a escribir en el buffer
+				i = 1;
+				do{
+					// Escribimos el renglon
+					if(canales & i){ // Canales activos
+						if(i == 0x04)
+							i = 3;
+						itoa(*(dato_ch+i-1), buff_aux, 10);
+						strcat(buff, buff_aux);
+						strcat(buff, ",");
+					} else{ // Canales inactivos
+						strcat(buff, "X,");
+					}
+
+					i <<= 1;
+				}while(i <= 0x04);
+
+				paux = strrchr(buff, ',');
+				*paux = '\0'; // Reemplazamos la ultima coma por NULL
+
+				strcat(buff, "\r\n"); // Ponemos el enter
+
+				i = strlen(buff);
+
+				/*
+				 * Cuando tenemos un bufer de casi 1024 lo escribimos, esto hace que
+				 * sea mas optima la velocidad de escritura, aprovechando mejor los
+				 * recursos del microcontrolador
+				 */
+				if(i >= SIZE_WRITE_SAVE-20){
+					xSemaphoreTake(sem_SD, portMAX_DELAY); // Siempre deberia poder tomarlo sin esperar
+					quantity = f_puts(buff, archivo);
+					fr = FR_OK; // Temas de debug
+					if(i == quantity && fr == FR_OK){ // Pudo escribir todos los bytes
+						fr = f_sync(archivo); // Aseguramos los datos en la SD
+
+						// Limpiamos el buffer para una proxima escritura
+						buff[0] = '\0';
+						Chip_GPIO_SetPinToggle(LPC_GPIO, LED_DEBUG);
+
+						if(fr == FR_OK){
+							/*
+							 * Liberamos este semaforo aca, para que termine una
+							 * tanda de escritura inclusive cuando se haya presionado el
+							 * boton de stop de grabacion
+							 */
+							xSemaphoreGive(sem_SD);
+						} else{
+							xSemaphoreGive(sem_SD); // No deberia entrar por aca NUNCA
+						}
+					} else{
+						//TODO: Manejo de errores
+					}
+				}
+			}
+		}
+	}
+}
+
+// Tarea encargada de variar los modos de señal que visualizamos
+static void ModeChange(void *pvParameters){
+	static MODO_T modo = MODO_CH1;
+	config_t configActual;
+	int16_t dato_aux = 5000;
+
+	while(1){
+		// Se presiono el boton para cambiar el modo
+		if(xSemaphoreTake(sem_modo, portMAX_DELAY) == pdTRUE){
+			uint8_t i;
+
+			vTaskDelay(200/portTICK_RATE_MS); // Anti-Rebote
+
+			modo++;
+			modo %= MODO_MAX;
+
+			switch(modo){
+			case MODO_CH1:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH1_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(2, &dato_aux);
+					ADC_SetEP(3, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH2:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH2_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(1, &dato_aux);
+					ADC_SetEP(3, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH3:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH3_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(1, &dato_aux);
+					ADC_SetEP(2, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH1PCH2:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH1_MASK | CH2_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(3, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH1PCH3:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH1_MASK | CH3_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(2, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH2PCH3:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH2_MASK | CH3_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				for(i = 0; i < 10; i++){
+					ADC_SetEP(1, &dato_aux);
+				}
+
+				break;
+			}
+			case MODO_CH1PCH2PCH3:{
+				// Cambiamos el dato en la cola
+				xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca nunca
+				configActual.canales_activos = CH1_MASK | CH2_MASK | CH3_MASK;
+				xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // Idem arriba
+
+				break;
+			}
+			default: break;
+			}
+
+			// Actualizamos los strings, borramos señal y demas...
+			SetupBackground();
+
+			while(!Chip_GPIO_GetPinState(LPC_GPIO, KEY_MODO)){
+				vTaskDelay(100/portTICK_RATE_MS);
+			}
+
+			vTaskDelay(200/portTICK_RATE_MS); // Para que se estabilice una vez soltado
+
+			// Volvemos a habilitar las interupciones
+			NVIC_ClearPendingIRQ(EINT3_IRQn);
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 0, (1 << 18) | (1 << 11));
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 2, 1 << 10);
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 0, (1 << 11) | (1 << 18));
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 2, 1 << 10);
+		}
+	}
+}
+
+// Tarea encargada de revisar el boton del Dimmer y variar el PWM de la intensidad de brillo
+static void DimmerTask(void *pvParameters){
+	static BRILLO_T brillo = BRILLO_25;
+	config_t configActual;
+
+	while(1){
+		// Se presiono el boton para cambiar el brillo
+		if(xSemaphoreTake(sem_dimm, portMAX_DELAY) == pdTRUE){
+			vTaskDelay(200/portTICK_RATE_MS); // Anti-Rebote
+
+			brillo++;
+			brillo %= BRILLO_MAX;
+
+			// Actualizo configuracion
+			xQueueReceive(cola_config, &configActual, portMAX_DELAY); // No deberia esperar
+			configActual.brillo_actual = brillo;
+			xQueueSendToBack(cola_config, &configActual, portMAX_DELAY); // No deberia esperar
+
+			switch(brillo){
+			case BRILLO_25:{
+				uint8_t ant[]="BRILLO:100%";
+				uint8_t brillo[]="BRILLO:25%";
+
+				Chip_TIMER_SetMatch(LPC_TIMER1, 0, 250); // 25%
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				// Limpio el brillo anterior
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, ant, BCKGD_COLOR, ROTACION90);
+				// Escribo el nuevo brillo
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, brillo, BRILLO_COLOR, ROTACION90);
+				xSemaphoreGive(sem_TFT);
+
+				break;
+			}
+			case BRILLO_50:{
+				uint8_t ant[]="BRILLO:25%";
+				uint8_t brillo[]="BRILLO:50%";
+
+				Chip_TIMER_SetMatch(LPC_TIMER1, 0, 500); // 50%
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				// Limpio el brillo anterior
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, ant, BCKGD_COLOR, ROTACION90);
+				// Escribo el nuevo brillo
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, brillo, BRILLO_COLOR, ROTACION90);
+				xSemaphoreGive(sem_TFT);
+
+				break;
+			}
+			case BRILLO_75:{
+				uint8_t ant[]="BRILLO:50%";
+				uint8_t brillo[]="BRILLO:75%";
+
+				Chip_TIMER_SetMatch(LPC_TIMER1, 0, 750); // 75%
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				// Limpio el brillo anterior
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, ant, BCKGD_COLOR, ROTACION90);
+				// Escribo el nuevo brillo
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, brillo, BRILLO_COLOR, ROTACION90);
+				xSemaphoreGive(sem_TFT);
+
+				break;
+			}
+			case BRILLO_99:{
+				uint8_t ant[]="BRILLO:75%";
+				uint8_t brillo[]="BRILLO:100%";
+
+				Chip_TIMER_SetMatch(LPC_TIMER1, 0, 999); // 99.9%
+
+				xSemaphoreTake(sem_TFT, portMAX_DELAY);
+				// Limpio el brillo anterior
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, ant, BCKGD_COLOR, ROTACION90);
+				// Escribo el nuevo brillo
+				MostrarString(BRILLO_X_POS, BRILLO_Y_POS, brillo, BRILLO_COLOR, ROTACION90);
+				xSemaphoreGive(sem_TFT);
+
+				break;
+			}
+			default:break;
+			}
+
+			while(!Chip_GPIO_GetPinState(LPC_GPIO, KEY_DIMMER)){
+				vTaskDelay(100/portTICK_RATE_MS);
+			}
+
+			vTaskDelay(200/portTICK_RATE_MS); // Para que se estabilice una vez soltado
+
+			// Volvemos a habilitar interrupciones
+			NVIC_ClearPendingIRQ(EINT3_IRQn);
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 0, (1 << 18) | (1 << 11));
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 2, 1 << 10);
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 0, (1 << 11) | (1 << 18));
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 2, 1 << 10);
+		}
+	}
+}
+
+// Tarea encargada de chequear cuando se dispara la grabacion en la SD/USB
+static void DisparoTask(void *pvParameters){
+	static uint8_t grabando = SAVING_NONE;
+	static uint8_t canales = 0;
+	static FIL arch;
+	msg_disparo_t mensaje;
+	config_t configActual;
+	FRESULT fr;
+
+	mensaje.archivo = &arch;
+	mensaje.canales = &canales;
+
+	while(1){
+		// Se presiono el boton de disparo de grabacion
+		if(xSemaphoreTake(sem_disp, portMAX_DELAY) == pdTRUE){
+			vTaskDelay(200/portTICK_RATE_MS); // Anti-Rebote
+
+			// Si no estabamos grabando la/s señal/es
+			if(grabando == SAVING_NONE){
+				// Primero nos fijamos por la inicializacion del USB
+				if(xSemaphoreTake(sem_USB_init, 0) == pdTRUE){
+					// Si esta enchufado, no tiene sentido que lo guardemos en la SD
+					xSemaphoreGive(sem_USB);
+
+					// Prohibimos que se cambie de modo
+					vTaskSuspend(ModeTask);
+
+					xSemaphoreTake(sem_TFT, portMAX_DELAY);
+					CircleFill(SAVING_X_POS, SAVING_Y_POS, SAVING_RADIUS, 1, SAVING_COLOR);
+					xSemaphoreGive(sem_TFT);
+
+					// Obtenemos los canales activos para disparar la tarea con los mismos
+					xQueuePeek(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca
+					canales = configActual.canales_activos;
+
+					// TODO: Disparar la tarea del USB de ser necesario
+
+					grabando = SAVING_USB;
+				} else{
+					// Si no esta enchufado, nos fijamos por la inicializacion de la SD
+
+					fr = f_mount(&fs, "0:", 1); // <<! ESTA FUNCION VA A COLGAR EL SISTEMA SI NO HAY SD
+
+					if(fr == FR_OK){
+						// Velocidad de comunicacion rapida
+						Chip_SSP_SetBitRate(LPC_SSP1, SPI_CLOCKRATE_HIGH);
+
+						// Pudimos montar la SD, habilitamos el semaforo correspondiente
+						xSemaphoreGive(sem_SD);
+
+						// Obtenemos los canales activos para disparar la tarea con los mismos
+						xQueuePeek(cola_config, &configActual, portMAX_DELAY); // No deberia quedarse aca
+						canales = configActual.canales_activos;
+
+						// Prohibimos que se cambie de modo
+						vTaskSuspend(ModeTask);
+
+						// Creamos la tarea de escritura de SD
+						xTaskCreate(SDWrite, (signed char *) "vSDWrite",
+									configMINIMAL_STACK_SIZE, (msg_disparo_t *) &mensaje, (tskIDLE_PRIORITY + 2UL),
+									&SDWriteTask);
+
+						xSemaphoreTake(sem_TFT, portMAX_DELAY);
+						CircleFill(SAVING_X_POS, SAVING_Y_POS, SAVING_RADIUS, 1, SAVING_COLOR);
+						xSemaphoreGive(sem_TFT);
+
+						xQueueReceive(cola_config, &configActual, portMAX_DELAY);
+						configActual.flag_sd = 0x01;
+						xQueueSendToBack(cola_config, &configActual, portMAX_DELAY);
+
+						grabando = SAVING_SD;
+					} else{
+						uint8_t error[]="ERROR EN SD/USB";
+
+						// Si no esta inicializada, damos aviso del error en pantalla
+						MostrarString(ERROR_X_POS, ERROR_Y_POS, error, ERROR_COLOR, ROTACION90);
+						grabando = SAVING_NONE;
+
+						vTaskDelay(2000 / portTICK_RATE_MS);
+
+						// Borramos el mensaje de error
+						MostrarString(ERROR_X_POS, ERROR_Y_POS, error, BCKGD_COLOR, ROTACION90);
+					}
+				}
+			} else{
+				// Finalizamos la grabacion
+				if(grabando == SAVING_SD){
+					char *buff;
+
+					// Si estabamos grabando en la SD
+					// Esperamos a la ultima escritura en la SD
+					xSemaphoreTake(sem_SD, portMAX_DELAY);
+
+					xQueueReceive(cola_buffer, &buff, portMAX_DELAY);
+
+					// Ultima escritura en el archivo
+					if(strlen(buff)){
+						fr = f_puts(buff, &arch);
+						if(fr == FR_OK){
+							fr = f_close(&arch);
+							if(fr == FR_OK){
+								// Desmonto la SD para poder sacarla tranquilo
+								fr = f_mount(NULL, "0:", 1);
+							} else{
+								// Algo fallo... No deberia entrar aca
+								fr = FR_OK;
+							}
+						} else{
+							// Algo fallo... No deberia entrar aca
+							fr = FR_OK;
+						}
+
+					} else{
+						/*
+						 * Aca no hace falta poner nada, ya que al hacer f_sync
+						 * en la tarea de escritura de la SD, aseguramos los datos
+						 * en la SD.
+						 */
+						fr = f_close(&arch);
+						if(fr == FR_OK){
+							// Desmonto la SD para poder sacarla tranquilo
+							fr = f_mount(NULL, "0:", 1);
+						} else{
+							// Algo fallo... No deberia entrar aca
+							fr = FR_OK;
+						}
+					}
+
+					// Liberamos la memoria pedida por la tarea anterior
+					free(buff);
+
+					// Eliminamos la tarea de escritura en la SD
+					if(SDWriteTask != NULL) // Deberia entrar siempre aca
+						vTaskDelete(SDWriteTask);
+
+					xSemaphoreTake(sem_TFT, portMAX_DELAY);
+					LCD_Rect(SAVE_TXT_X_POS-15, SAVE_TXT_Y_POS, SAVE_TXT_X_POS, SAVE_TXT_Y_POS+80, BCKGD_COLOR);
+					CircleFill(SAVING_X_POS, SAVING_Y_POS, SAVING_RADIUS, 1, BCKGD_COLOR);
+					xSemaphoreGive(sem_TFT);
+
+					xQueueReceive(cola_config, &configActual, portMAX_DELAY);
+					configActual.flag_sd = 0x00;
+					xQueueSendToBack(cola_config, &configActual, portMAX_DELAY);
+				} else{
+					// Si estabamos grabando por USB en la PC
+					// TODO: Hacer la rutina de finalizacion de USB
+				}
+
+				grabando = SAVING_NONE;
+
+				// Volvemos a permitir que se cambie de modo
+				vTaskResume(ModeTask);
+			}
+
+			while(!Chip_GPIO_GetPinState(LPC_GPIO, KEY_DISPARO)){
+				vTaskDelay(100/portTICK_RATE_MS);
+			}
+
+			vTaskDelay(200/portTICK_RATE_MS); // Para que se estabilce una vez soltado
+
+			// Volvemos a habilitar interrupciones
+			NVIC_ClearPendingIRQ(EINT3_IRQn);
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 0, (1 << 18) | (1 << 11));
+			Chip_GPIOINT_ClearIntStatus(LPC_GPIOINT, 2, 1 << 10);
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 0, (1 << 18) | (1 << 11));
+			Chip_GPIOINT_SetIntFalling(LPC_GPIOINT, 2, 1 << 10);
+		}
+	}
+}
+
+/*****************************************************************************
+ * Public functions
+ ****************************************************************************/
+int main(void)
+{
+	config_t configInicial;
+	uint8_t i;
+	int16_t dato_aux = 5000;
+
+	SystemCoreClockUpdate();
+
+	configInicial.brillo_actual = BRILLO_25;
+	configInicial.canales_activos = CH1_MASK;
+	configInicial.flag_usb = 0x00;
+	configInicial.flag_sd = 0x00;
+
+	vSemaphoreCreateBinary(sem_SD_init);
+	vSemaphoreCreateBinary(sem_SD_Deinit);
+	vSemaphoreCreateBinary(sem_USB);
+	vSemaphoreCreateBinary(sem_USB_init);
+	vSemaphoreCreateBinary(sem_disp);
+	vSemaphoreCreateBinary(sem_dimm);
+	vSemaphoreCreateBinary(sem_modo);
+	sem_SD = xSemaphoreCreateMutex();
+	sem_TFT = xSemaphoreCreateMutex();
+
+	xSemaphoreTake(sem_SD_init, portMAX_DELAY);
+	xSemaphoreTake(sem_USB, portMAX_DELAY);
+	xSemaphoreTake(sem_USB_init, portMAX_DELAY);
+	xSemaphoreTake(sem_dimm, portMAX_DELAY);
+	xSemaphoreTake(sem_disp, portMAX_DELAY);
+	xSemaphoreTake(sem_modo, portMAX_DELAY);
+
+	colaADC0 = xQueueCreate( LargoUpdateSignal , sizeof( uint16_t ) );
+	colaADC1 = xQueueCreate( LargoUpdateSignal , sizeof( uint16_t ) );
+	colaADC2 = xQueueCreate( LargoUpdateSignal , sizeof( uint16_t ) );
+	cola_base_tiempo = xQueueCreate( 1, sizeof( uint32_t ) );
+	cola_SSP_TX = xQueueCreate( LargoColaSSP, sizeof( uint8_t ) );
+	cola_SSP_RX = xQueueCreate( LargoColaSSP, sizeof( uint8_t ) );
+	cola_SD = xQueueCreate( LargoColaSD, sizeof( int16_t ) );
+	cola_buffer = xQueueCreate( 1, sizeof( char * ) );
+	cola_config = xQueueCreate( 1, sizeof( config_t ) );
+
+	xQueueSendToBack(cola_config, &configInicial, portMAX_DELAY);
+
+	for(i = 0; i < 10; i++){
+		ADC_SetEP(2, &dato_aux);
+		ADC_SetEP(3, &dato_aux);
+	}
+
+	prvSetupHardware();
+
+	xTaskCreate(TFTInitAndSetup, (signed char *) "vTaskTFTI",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 5UL),
+				(xTaskHandle *) NULL);
+
+	xTaskCreate(SignalUpdateCH1, (signed char *) "vTaskSignalUpdate1",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 3UL),
+				(xTaskHandle *) NULL);
+
+	xTaskCreate(SignalUpdateCH2, (signed char *) "vTaskSignalUpdate2",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 3UL),
+				(xTaskHandle *) NULL);
+
+	xTaskCreate(SignalUpdateCH3, (signed char *) "vTaskSignalUpdate3",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 3UL),
+				(xTaskHandle *) NULL);
+
+	xTaskCreate(DimmerTask, (signed char *) "vTaskDimmer",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 1UL),
+				(xTaskHandle *) NULL);
+
+	xTaskCreate(DisparoTask, (signed char *) "vTaskDisparo",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 4UL),
+				(xTaskHandle *) &DisparoTaskHandle);
+
+	xTaskCreate(ModeChange, (signed char *) "vTaskModeChange",
+				configMINIMAL_STACK_SIZE, NULL, (tskIDLE_PRIORITY + 3UL),
+				&ModeTask);
+
+	/* Start the scheduler */
+	vTaskStartScheduler();
+
+	/* Should never arrive here */
+	return 1;
+}
