@@ -1,5 +1,5 @@
 # holter-monitor
-An Afordable Holter Monitor  
+An Afordable Holter Monitor    
 What is a Holter monitor?  
 A Holter monitor is a small, battery-powered medical device that measures your heart’s activity, such as rate and rhythm. Your doctor may ask you to use one if they need more information about how your heart functions than a routine electrocardiogram (ECG) can give them.
 
