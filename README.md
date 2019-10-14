@@ -21,7 +21,8 @@ The pulse sensor used in this project is a plug-and-play heart-rate sensor for A
 Simply clip the Pulse Sensor to your earlobe or finger tip, infrared sensor reads blood pulse by comparing emitted and received light variations.  
   
 Microcontroller  
-The microcontroller used in this project is LPC1769, an ARM Cortex M3 by NXP with LPCXpresso IDE to develop the firmware. It samples heart pulse sensors by using its own ADC and, if usb connection available, sends data to PC application or showing waveforms in a TFT Display and saving in a local SD* storage via SPI protocol by default. 
+The microcontroller used in this project is LPC1769, an ARM Cortex M3 by NXP with LPCXpresso IDE to develop the firmware. It implements FreeRTOS, a Real Time OS for embedded devices.
+It samples heart pulse sensors by using its own ADC and, if usb connection available, sends data to PC application or showing waveforms in a TFT Display and saving in a local SD* storage via SPI protocol by default. 
 The post process of the waveform signal is made before sending to many receivers to filter any noise and get clean information. 
 It has to be fast enough to capture QRS heart waveform of the ECG (Electrocardiogram) to read effective data.  
   
